@@ -534,35 +534,6 @@ static void kb_toggle_state(void)
 	}
 }
 
-static void kb_next_mode(void)
-{
-	static enum kb_mode modes[] = {
-		KB_MODE_RANDOM_COLOR,
-		KB_MODE_DANCE,
-		KB_MODE_TEMPO,
-		KB_MODE_FLASH,
-		KB_MODE_WAVE,
-		KB_MODE_BREATHE,
-		KB_MODE_CYCLE,
-		KB_MODE_CUSTOM,
-	};
-
-	size_t i;
-
-	if (kb_backlight.state == KB_STATE_OFF)
-		return;
-
-	for (i = 0; i < ARRAY_SIZE(modes); i++) {
-		if (modes[i] == kb_backlight.mode)
-			break;
-	}
-
-	BUG_ON(i == ARRAY_SIZE(modes));
-
-	kb_backlight.ops->set_mode(modes[(i + 1) % ARRAY_SIZE(modes)]);
-}
-
-
 /* full color backlight keyboard */
 
 static void kb_full_color__set_color(unsigned left, unsigned center,
@@ -676,6 +647,27 @@ static struct kb_backlight_ops kb_full_color_ops = {
 	.init           = kb_full_color__init,
 };
 
+static void kb_next_color(void)
+{
+	size_t i;
+	unsigned n;
+
+	if (kb_backlight.state == KB_STATE_OFF)
+		return;
+
+	for (i = 0; i < ARRAY_SIZE(kb_colors); i++) {
+		if (i == kb_backlight.color.left)
+			break;
+	}
+
+	if (i == ARRAY_SIZE(kb_colors) - 1) {
+		n = 1;
+	} else {
+		n = i + 1;
+	}
+
+	kb_backlight.ops->set_color(n, n, n);
+}
 
 /* 8 color backlight keyboard */
 
@@ -840,7 +832,7 @@ static void clevo_xsm_wmi_notify(u32 value, void *context)
 			kb_inc_brightness();
 			break;
 		case 0x83:
-			kb_next_mode();
+			kb_next_color();
 			break;
 		case 0x9F:
 			kb_toggle_state();

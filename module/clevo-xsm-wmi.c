@@ -1,10 +1,11 @@
 /*
  * clevo-xsm-wmi.c
  *
- * Copyright (C) 2014 Arnoud Willemsen <mail@lynthium.com>
+ * Copyright (C) 2014-2015 Arnoud Willemsen <mail@lynthium.com>
  *
- * Based on tuxedo-wmi by Christoph Jaeger
- * Copyright (C) 2013-2014 Christoph Jaeger <christophjaeger@linux.com>
+ * Based on tuxedo-wmi by TUXEDO Computers GmbH
+ * Copyright (C) 2013-2015 TUXEDO Computers GmbH <tux@tuxedocomputers.com>
+ * Custom build Linux Notebooks and Computers: www.tuxedocomputers.com
  *
  * This program is free software;  you can redistribute it and/or modify
  * it under the terms of the  GNU General Public License as published by
@@ -19,6 +20,9 @@
  * You should  have received  a copy of  the GNU General  Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
+
+#define CLEVO_XSM_DRIVER_NAME KBUILD_MODNAME
+#define pr_fmt(fmt) CLEVO_XSM_DRIVER_NAME ": " fmt
 
 #include <linux/acpi.h>
 #include <linux/delay.h>
@@ -35,19 +39,12 @@
 #include <linux/version.h>
 #include <linux/workqueue.h>
 
-MODULE_AUTHOR("Arnoud Willemsen <mail@lynthium.com>");
-MODULE_DESCRIPTION("Clevo SM series laptop driver.");
-MODULE_LICENSE("GPL");
-MODULE_VERSION("0.0.2");
-
-#define CLEVO_XSM_DRIVER_NAME KBUILD_MODNAME
-
-#define __CLEVO_XSM_PR(lvl, fmt, ...) \
-	do { pr_##lvl(CLEVO_XSM_DRIVER_NAME ": " fmt, ##__VA_ARGS__); } while (0)
+#define __CLEVO_XSM_PR(lvl, fmt, ...) do { pr_##lvl(fmt, ##__VA_ARGS__); } \
+		while (0)
 #define CLEVO_XSM_INFO(fmt, ...) __CLEVO_XSM_PR(info, fmt, ##__VA_ARGS__)
 #define CLEVO_XSM_ERROR(fmt, ...) __CLEVO_XSM_PR(err, fmt, ##__VA_ARGS__)
 #define CLEVO_XSM_DEBUG(fmt, ...) __CLEVO_XSM_PR(debug, "[%s:%u] " fmt, \
-	__func__, __LINE__, ##__VA_ARGS__)
+		__func__, __LINE__, ##__VA_ARGS__)
 
 #define CLEVO_EVENT_GUID  "ABBC0F6B-8EA1-11D1-00A0-C90629100000"
 #define CLEVO_EMAIL_GUID  "ABBC0F6C-8EA1-11D1-00A0-C90629100000"
@@ -74,7 +71,7 @@ enum kb_color COLORS;
 
 union kb_rgb_color {
 	u32 rgb;
-	struct { u32 b:8, g:8, r:8, :8; };
+	struct { u32 b:8, g:8, r:8, : 8; };
 };
 
 #define C(n, v) { .name = #n, .value = { .rgb = v, }, }
@@ -112,7 +109,8 @@ static int param_set_kb_color(const char *val, const struct kernel_param *kp)
 
 static int param_get_kb_color(char *buffer, const struct kernel_param *kp)
 {
-	return sprintf(buffer, "%s", kb_colors[*((enum kb_color *) kp->arg)].name);
+	return sprintf(buffer, "%s",
+		kb_colors[*((enum kb_color *) kp->arg)].name);
 }
 
 static const struct kernel_param_ops param_ops_kb_color = {
@@ -120,8 +118,8 @@ static const struct kernel_param_ops param_ops_kb_color = {
 	.get = param_get_kb_color,
 };
 
-static enum kb_color param_kb_color[3] = { [0 ... 2] = KB_COLOR_DEFAULT };
-static int param_kb_color_num = 3;
+static enum kb_color param_kb_color[] = { [0 ... 3] = KB_COLOR_DEFAULT };
+static int param_kb_color_num;
 #define param_check_kb_color(name, p) __param_check(name, p, enum kb_color)
 module_param_array_named(kb_color, param_kb_color, kb_color,
 						 &param_kb_color_num, S_IRUSR);
@@ -141,21 +139,9 @@ static int param_set_kb_brightness(const char *val,
 	return ret;
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,12,0)
-static int param_get_kb_brightness(char *buffer, const struct kernel_param *kp)
-{
-	/* due to a bug in the kernel, we do this ourselves */
-	return sprintf(buffer, "%hhu", *((unsigned char *) kp->arg));
-}
-#endif
-
 static const struct kernel_param_ops param_ops_kb_brightness = {
 	.set = param_set_kb_brightness,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,12,0)
-	.get = param_get_kb_brightness,
-#else
 	.get = param_get_byte,
-#endif
 };
 
 static unsigned char param_kb_brightness = KB_BRIGHTNESS_DEFAULT;
@@ -164,9 +150,13 @@ module_param_named(kb_brightness, param_kb_brightness, kb_brightness, S_IRUSR);
 MODULE_PARM_DESC(kb_brightness, "Set the brightness of the keyboard backlight");
 
 
-static bool param_kb_off = false;
+static bool param_kb_off;
 module_param_named(kb_off, param_kb_off, bool, S_IRUSR);
 MODULE_PARM_DESC(kb_off, "Switch keyboard backlight off");
+
+static bool param_kb_cycle_colors;
+module_param_named(kb_cycle_colors, param_kb_cycle_colors, bool, S_IRUSR);
+MODULE_PARM_DESC(kb_cycle_colors, "Cycle colors rather than modes");
 
 
 #define POLL_FREQ_MIN     1
@@ -181,27 +171,16 @@ static int param_set_poll_freq(const char *val, const struct kernel_param *kp)
 
 	if (!ret)
 		*((unsigned char *) kp->arg) = clamp_t(unsigned char,
-											   *((unsigned char *) kp->arg),
-											   POLL_FREQ_MIN, POLL_FREQ_MAX);
+			*((unsigned char *) kp->arg),
+			POLL_FREQ_MIN, POLL_FREQ_MAX);
 
 	return ret;
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,12,0)
-static int param_get_poll_freq(char *buffer, const struct kernel_param *kp)
-{
-	/* due to a bug in the kernel, we do this ourselves */
-	return sprintf(buffer, "%hhu", *((unsigned char *) kp->arg));
-}
-#endif
 
 static const struct kernel_param_ops param_ops_poll_freq = {
 	.set = param_set_poll_freq,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(3,12,0)
-	.get = param_get_poll_freq,
-#else
 	.get = param_get_byte,
-#endif
 };
 
 static unsigned char param_poll_freq = POLL_FREQ_DEFAULT;
@@ -214,6 +193,10 @@ struct platform_device *clevo_xsm_platform_device;
 
 
 /* LED sub-driver */
+
+static bool param_led_invert;
+module_param_named(led_invert, param_led_invert, bool, 0);
+MODULE_PARM_DESC(led_invert, "Invert airplane mode LED state.");
 
 static struct workqueue_struct *led_workqueue;
 
@@ -230,9 +213,13 @@ static void airplane_led_update(struct work_struct *work)
 	w = container_of(work, struct _led_work, work);
 
 	ec_read(0xD9, &byte);
-	ec_write(0xD9, w->wk ? byte | 0x40 : byte & ~0x40);
 
-	/* wmbb 0x6C 1 */
+	if (param_led_invert)
+		ec_write(0xD9, w->wk ? byte & ~0x40 : byte | 0x40);
+	else
+		ec_write(0xD9, w->wk ? byte | 0x40 : byte & ~0x40);
+
+	/* wmbb 0x6C 1 (?) */
 }
 
 static enum led_brightness airplane_led_get(struct led_classdev *led_cdev)
@@ -240,12 +227,16 @@ static enum led_brightness airplane_led_get(struct led_classdev *led_cdev)
 	u8 byte;
 
 	ec_read(0xD9, &byte);
-	return byte & 0x40 ? LED_FULL : LED_OFF;
+
+	if (param_led_invert)
+		return byte & 0x40 ? LED_OFF : LED_FULL;
+	else
+		return byte & 0x40 ? LED_FULL : LED_OFF;
 }
 
 /* must not sleep */
 static void airplane_led_set(struct led_classdev *led_cdev,
-							 enum led_brightness value)
+	enum led_brightness value)
 {
 	led_work.wk = value;
 	queue_work(led_workqueue, &led_work.work);
@@ -268,7 +259,8 @@ static int __init clevo_xsm_led_init(void)
 
 	INIT_WORK(&led_work.work, airplane_led_update);
 
-	err = led_classdev_register(&clevo_xsm_platform_device->dev, &airplane_led);
+	err = led_classdev_register(&clevo_xsm_platform_device->dev,
+		&airplane_led);
 	if (unlikely(err))
 		goto err_destroy_workqueue;
 
@@ -294,7 +286,7 @@ static void __exit clevo_xsm_led_exit(void)
 static struct input_dev *clevo_xsm_input_device;
 static DEFINE_MUTEX(clevo_xsm_input_report_mutex);
 
-static unsigned int global_report_cnt = 0;
+static unsigned int global_report_cnt;
 
 /* call with clevo_xsm_input_report_mutex held */
 static void clevo_xsm_input_report_key(unsigned int code)
@@ -335,13 +327,15 @@ static int clevo_xsm_input_polling_thread(void *data)
 			clevo_xsm_input_report_key(KEY_RFKILL);
 			report_cnt++;
 
-			CLEVO_XSM_DEBUG("Led status: %d", airplane_led_get(&airplane_led));
+			CLEVO_XSM_DEBUG("Led status: %d",
+				airplane_led_get(&airplane_led));
 
-			airplane_led_set(&airplane_led, (airplane_led_get(&airplane_led) ? 0 : 1));
+			airplane_led_set(&airplane_led,
+				(airplane_led_get(&airplane_led) ? 0 : 1));
 
 			mutex_unlock(&clevo_xsm_input_report_mutex);
 		}
-		msleep(1000 / param_poll_freq);
+		msleep_interruptible(1000 / param_poll_freq);
 	}
 
 	CLEVO_XSM_INFO("Polling thread exiting\n");
@@ -351,8 +345,9 @@ static int clevo_xsm_input_polling_thread(void *data)
 
 static int clevo_xsm_input_open(struct input_dev *dev)
 {
-	clevo_xsm_input_polling_task = kthread_run(clevo_xsm_input_polling_thread,
-										   NULL, "clevo_xsm-polld");
+	clevo_xsm_input_polling_task = kthread_run(
+		clevo_xsm_input_polling_thread,
+		NULL, "clevo_xsm-polld");
 
 	if (unlikely(IS_ERR(clevo_xsm_input_polling_task))) {
 		clevo_xsm_input_polling_task = NULL;
@@ -433,10 +428,10 @@ static int clevo_xsm_wmi_evaluate_wmbb_method(u32 method_id, u32 arg,
 	CLEVO_XSM_DEBUG("%0#4x  IN : %0#6x\n", method_id, arg);
 
 	status = wmi_evaluate_method(CLEVO_GET_GUID, 0x01,
-								 method_id, &in, &out);
+		method_id, &in, &out);
 
 	if (unlikely(ACPI_FAILURE(status)))
-	goto exit;
+		goto exit;
 
 	obj = (union acpi_object *) out.pointer;
 	if (obj && obj->type == ACPI_TYPE_INTEGER)
@@ -460,6 +455,10 @@ exit:
 
 
 static struct {
+	enum kb_lower {
+		KB_HAS_LOWER_TRUE,
+		KB_HAS_LOWER_FALSE,
+	} lower;
 
 	enum kb_state {
 		KB_STATE_OFF,
@@ -470,6 +469,7 @@ static struct {
 		unsigned left;
 		unsigned center;
 		unsigned right;
+		unsigned lower;
 	} color;
 
 	unsigned brightness;
@@ -487,7 +487,8 @@ static struct {
 
 	struct kb_backlight_ops {
 		void (*set_state)(enum kb_state state);
-		void (*set_color)(unsigned left, unsigned center, unsigned right);
+		void (*set_color)(unsigned left, unsigned center,
+			unsigned right, unsigned lower);
 		void (*set_brightness)(unsigned brightness);
 		void (*set_mode)(enum kb_mode);
 		void (*init)(void);
@@ -534,10 +535,59 @@ static void kb_toggle_state(void)
 	}
 }
 
+static void kb_next_mode(void)
+{
+	static enum kb_mode modes[] = {
+		KB_MODE_RANDOM_COLOR,
+		KB_MODE_DANCE,
+		KB_MODE_TEMPO,
+		KB_MODE_FLASH,
+		KB_MODE_WAVE,
+		KB_MODE_BREATHE,
+		KB_MODE_CYCLE,
+		KB_MODE_CUSTOM,
+	};
+
+	size_t i;
+
+	if (kb_backlight.state == KB_STATE_OFF)
+		return;
+
+	for (i = 0; i < ARRAY_SIZE(modes); i++) {
+		if (modes[i] == kb_backlight.mode)
+			break;
+	}
+
+	BUG_ON(i == ARRAY_SIZE(modes));
+
+	kb_backlight.ops->set_mode(modes[(i + 1) % ARRAY_SIZE(modes)]);
+}
+
+static void kb_next_color(void)
+{
+	size_t i;
+	unsigned int nc;
+
+	if (kb_backlight.state == KB_STATE_OFF)
+		return;
+
+	for (i = 0; i < ARRAY_SIZE(kb_colors); i++) {
+		if (i == kb_backlight.color.left)
+			break;
+	}
+
+	if (i + 1 > ARRAY_SIZE(kb_colors))
+		nc = 0;
+	else
+		nc = i + 1;
+
+	kb_backlight.ops->set_color(nc, nc, nc, nc);
+}
+
 /* full color backlight keyboard */
 
 static void kb_full_color__set_color(unsigned left, unsigned center,
-	unsigned right)
+	unsigned right, unsigned lower)
 {
 	u32 cmd;
 
@@ -564,6 +614,16 @@ static void kb_full_color__set_color(unsigned left, unsigned center,
 
 	if (!clevo_xsm_wmi_evaluate_wmbb_method(SET_KB_LED, cmd, NULL))
 		kb_backlight.color.right = right;
+
+	if (kb_backlight.lower == KB_HAS_LOWER_TRUE) {
+		cmd = 0xF3000000;
+		cmd |= kb_colors[lower].value.b << 16;
+		cmd |= kb_colors[lower].value.r << 8;
+		cmd |= kb_colors[lower].value.g << 0;
+
+		if(!clevo_xsm_wmi_evaluate_wmbb_method(SET_KB_LED, cmd, NULL))
+			kb_backlight.color.lower = lower;
+	}
 
 	kb_backlight.mode = KB_MODE_CUSTOM;
 }
@@ -598,8 +658,9 @@ static void kb_full_color__set_mode(unsigned mode)
 
 	if (mode == KB_MODE_CUSTOM) {
 		kb_full_color__set_color(kb_backlight.color.left,
-								 kb_backlight.color.center,
-								 kb_backlight.color.right);
+			kb_backlight.color.center,
+			kb_backlight.color.right,
+			kb_backlight.color.lower);
 		kb_full_color__set_brightness(kb_backlight.brightness);
 		return;
 	}
@@ -633,9 +694,11 @@ static void kb_full_color__init(void)
 {
 	CLEVO_XSM_DEBUG();
 
+	kb_backlight.lower = KB_HAS_LOWER_FALSE;
+
 	kb_full_color__set_state(param_kb_off ? KB_STATE_OFF : KB_STATE_ON);
 	kb_full_color__set_color(param_kb_color[0], param_kb_color[1],
-		param_kb_color[2]);
+		param_kb_color[2], param_kb_color[3]);
 	kb_full_color__set_brightness(param_kb_brightness);
 }
 
@@ -647,32 +710,30 @@ static struct kb_backlight_ops kb_full_color_ops = {
 	.init           = kb_full_color__init,
 };
 
-static void kb_next_color(void)
+static void kb_full_color__init_lower(void)
 {
-	size_t i;
-	unsigned n;
+	CLEVO_XSM_DEBUG();
 
-	if (kb_backlight.state == KB_STATE_OFF)
-		return;
+	kb_backlight.lower = KB_HAS_LOWER_TRUE;
 
-	for (i = 0; i < ARRAY_SIZE(kb_colors); i++) {
-		if (i == kb_backlight.color.left)
-			break;
-	}
-
-	if (i == ARRAY_SIZE(kb_colors) - 1) {
-		n = 1;
-	} else {
-		n = i + 1;
-	}
-
-	kb_backlight.ops->set_color(n, n, n);
+	kb_full_color__set_state(param_kb_off ? KB_STATE_OFF : KB_STATE_ON);
+	kb_full_color__set_color(param_kb_color[0], param_kb_color[1],
+		param_kb_color[2], param_kb_color[3]);
+	kb_full_color__set_brightness(param_kb_brightness);
 }
+
+static struct kb_backlight_ops kb_full_color_with_lower_ops = {
+	.set_state      = kb_full_color__set_state,
+	.set_color      = kb_full_color__set_color,
+	.set_brightness = kb_full_color__set_brightness,
+	.set_mode       = kb_full_color__set_mode,
+	.init           = kb_full_color__init_lower,
+};
 
 /* 8 color backlight keyboard */
 
 static void kb_8_color__set_color(unsigned left, unsigned center,
-	unsigned right)
+	unsigned right, unsigned lower)
 {
 	u32 cmd = 0x02010000;
 
@@ -722,15 +783,16 @@ static void kb_8_color__set_mode(unsigned mode)
 
 	clevo_xsm_wmi_evaluate_wmbb_method(SET_KB_LED, 0x20000000, NULL);
 
-	if (mode == KB_MODE_CUSTOM){
+	if (mode == KB_MODE_CUSTOM) {
 		kb_8_color__set_color(kb_backlight.color.left,
-							  kb_backlight.color.center,
-							  kb_backlight.color.right);
+			kb_backlight.color.center,
+			kb_backlight.color.right, kb_backlight.color.lower);
 		kb_8_color__set_brightness(kb_backlight.brightness);
 		return;
 	}
 
-	if (!clevo_xsm_wmi_evaluate_wmbb_method(SET_KB_LED, cmds[mode], NULL))
+	if (!clevo_xsm_wmi_evaluate_wmbb_method(SET_KB_LED,
+		cmds[mode], NULL))
 		kb_backlight.mode = mode;
 }
 
@@ -740,7 +802,8 @@ static void kb_8_color__set_state(enum kb_state state)
 
 	switch (state) {
 	case KB_STATE_OFF:
-		if (!clevo_xsm_wmi_evaluate_wmbb_method(SET_KB_LED, 0x22010000, NULL))
+		if (!clevo_xsm_wmi_evaluate_wmbb_method(SET_KB_LED,
+			0x22010000, NULL))
 			kb_backlight.state = state;
 		break;
 	case KB_STATE_ON:
@@ -756,8 +819,6 @@ static void kb_8_color__init(void)
 {
 	CLEVO_XSM_DEBUG();
 
-	/* well, that's an uglymoron ... */
-
 	kb_8_color__set_state(KB_STATE_OFF);
 
 	kb_backlight.color.left   = param_kb_color[0];
@@ -766,11 +827,12 @@ static void kb_8_color__init(void)
 
 	kb_backlight.brightness = param_kb_brightness;
 	kb_backlight.mode       = KB_MODE_CUSTOM;
+	kb_backlight.lower      = KB_HAS_LOWER_FALSE;
 
 	if (!param_kb_off) {
 		kb_8_color__set_color(kb_backlight.color.left,
-							  kb_backlight.color.center,
-							  kb_backlight.color.right);
+			kb_backlight.color.center,
+			kb_backlight.color.right, kb_backlight.color.lower);
 		kb_8_color__set_brightness(kb_backlight.brightness);
 		kb_8_color__set_state(KB_STATE_ON);
 	}
@@ -787,7 +849,7 @@ static struct kb_backlight_ops kb_8_color_ops = {
 
 static void clevo_xsm_wmi_notify(u32 value, void *context)
 {
-	static unsigned int report_cnt = 0;
+	static unsigned int report_cnt;
 
 	u32 event;
 
@@ -832,7 +894,10 @@ static void clevo_xsm_wmi_notify(u32 value, void *context)
 			kb_inc_brightness();
 			break;
 		case 0x83:
-			kb_next_color();
+			if (!param_kb_cycle_colors)
+				kb_next_mode();
+			else
+				kb_next_color();
 			break;
 		case 0x9F:
 			kb_toggle_state();
@@ -847,10 +912,10 @@ static int clevo_xsm_wmi_probe(struct platform_device *dev)
 	int status;
 
 	status = wmi_install_notify_handler(CLEVO_EVENT_GUID,
-										clevo_xsm_wmi_notify, NULL);
+		clevo_xsm_wmi_notify, NULL);
 	if (unlikely(ACPI_FAILURE(status))) {
 		CLEVO_XSM_ERROR("Could not register WMI notify handler (%0#6x)\n",
-					 status);
+			status);
 		return -EIO;
 	}
 
@@ -890,7 +955,7 @@ static struct platform_driver clevo_xsm_platform_driver = {
 
 /* RFKILL sub-driver */
 
-static bool param_rfkill = false;
+static bool param_rfkill;
 module_param_named(rfkill, param_rfkill, bool, 0);
 MODULE_PARM_DESC(rfkill, "Enable WWAN-RFKILL capability.");
 
@@ -920,9 +985,9 @@ static int __init clevo_xsm_rfkill_init(void)
 	clevo_xsm_wmi_evaluate_wmbb_method(TALK_BIOS_3G, 1, NULL);
 
 	clevo_xsm_wwan_rfkill_device = rfkill_alloc("clevo_xsm-wwan",
-											 &clevo_xsm_platform_device->dev,
-											 RFKILL_TYPE_WWAN,
-											 &clevo_xsm_wwan_rfkill_ops, NULL);
+		&clevo_xsm_platform_device->dev,
+		RFKILL_TYPE_WWAN,
+		&clevo_xsm_wwan_rfkill_ops, NULL);
 	if (unlikely(!clevo_xsm_wwan_rfkill_device))
 		return -ENOMEM;
 
@@ -970,6 +1035,9 @@ static ssize_t clevo_xsm_brightness_store(struct device *child,
 	unsigned int val;
 	int ret;
 
+	if (!kb_backlight.ops)
+		return -EINVAL;
+
 	ret = kstrtouint(buf, 0, &val);
 	if (ret)
 		return ret;
@@ -993,6 +1061,9 @@ static ssize_t clevo_xsm_state_store(struct device *child,
 {
 	unsigned int val;
 	int ret;
+
+	if (!kb_backlight.ops)
+		return -EINVAL;
 
 	ret = kstrtouint(buf, 0, &val);
 	if (ret)
@@ -1030,6 +1101,9 @@ static ssize_t clevo_xsm_mode_store(struct device *child,
 	unsigned int val;
 	int ret;
 
+	if (!kb_backlight.ops)
+		return -EINVAL;
+
 	ret = kstrtouint(buf, 0, &val);
 	if (ret)
 		return ret;
@@ -1046,21 +1120,33 @@ static DEVICE_ATTR(kb_mode, 0644,
 static ssize_t clevo_xsm_color_show(struct device *child,
 	struct device_attribute *attr, char *buf)
 {
-	return sprintf(buf, "%s %s %s\n", kb_colors[kb_backlight.color.left].name,
-		kb_colors[kb_backlight.color.center].name,
-		kb_colors[kb_backlight.color.right].name);
+	if (kb_backlight.lower == KB_HAS_LOWER_TRUE)
+		return sprintf(buf, "%s %s %s %s\n",
+			kb_colors[kb_backlight.color.left].name,
+			kb_colors[kb_backlight.color.center].name,
+			kb_colors[kb_backlight.color.right].name,
+			kb_colors[kb_backlight.color.lower].name);
+	else
+		return sprintf(buf, "%s %s %s\n",
+			kb_colors[kb_backlight.color.left].name,
+			kb_colors[kb_backlight.color.center].name,
+			kb_colors[kb_backlight.color.right].name);
 }
 
 static ssize_t clevo_xsm_color_store(struct device *child,
 	struct device_attribute *attr, const char *buf, size_t size)
 {
 	unsigned int i, j;
-	unsigned int val[3] = {0};
+	unsigned int val[4] = {0};
 	char left[8];
 	char right[8];
 	char center[8];
+	char lower[8];
 
-	i = sscanf(buf, "%7s %7s %7s", left, center, right);
+	if (!kb_backlight.ops)
+		return -EINVAL;
+
+	i = sscanf(buf, "%7s %7s %7s %7s", left, center, right, lower);
 
 	if (i == 1) {
 		for (j = 0; j < ARRAY_SIZE(kb_colors); j++) {
@@ -1068,8 +1154,9 @@ static ssize_t clevo_xsm_color_store(struct device *child,
 				val[0] = j;
 		}
 		val[0] = clamp_t(unsigned, val[0], 0, ARRAY_SIZE(kb_colors));
-		val[2] = val[1] = val[0];
-	} else if (i == 3) {
+		val[3] = val[2] = val[1] = val[0];
+
+	} else if (i == 3 || i == 4) {
 		for (j = 0; j < ARRAY_SIZE(kb_colors); j++) {
 			if (!strcmp(left, kb_colors[j].name))
 				val[0] = j;
@@ -1077,14 +1164,18 @@ static ssize_t clevo_xsm_color_store(struct device *child,
 				val[1] = j;
 			if (!strcmp(right, kb_colors[j].name))
 				val[2] = j;
+			if (!strcmp(lower, kb_colors[j].name))
+				val[3] = j;
 		}
 		val[0] = clamp_t(unsigned, val[0], 0, ARRAY_SIZE(kb_colors));
 		val[1] = clamp_t(unsigned, val[1], 0, ARRAY_SIZE(kb_colors));
 		val[2] = clamp_t(unsigned, val[2], 0, ARRAY_SIZE(kb_colors));
+		val[3] = clamp_t(unsigned, val[3], 0, ARRAY_SIZE(kb_colors));
+
 	} else
 		return -EINVAL;
 
-	kb_backlight.ops->set_color(val[0], val[1], val[2]);
+	kb_backlight.ops->set_color(val[0], val[1], val[2], val[3]);
 
 	return size;
 }
@@ -1101,48 +1192,83 @@ static int __init clevo_xsm_dmi_matched(const struct dmi_system_id *id)
 	return 1;
 }
 
-static struct dmi_system_id __initdata clevo_xsm_dmi_table[] = {
+static struct dmi_system_id clevo_xsm_dmi_table[] __initdata = {
+	{
+		.ident = "Clevo P7xxDM(-G)",
+		.matches = {
+			DMI_MATCH(DMI_PRODUCT_NAME, "P7xxDM(-G)"),
+		},
+		.callback = clevo_xsm_dmi_matched,
+		.driver_data = &kb_full_color_with_lower_ops,
+	},
+	{
+		.ident = "Clevo P750ZM",
+		.matches = {
+			DMI_MATCH(DMI_PRODUCT_NAME, "P750ZM"),
+		},
+		.callback = clevo_xsm_dmi_matched,
+		.driver_data = &kb_full_color_with_lower_ops,
+	},
+	{
+		.ident = "Clevo P750ZM",
+		.matches = {
+			DMI_MATCH(DMI_PRODUCT_NAME, "P5 Pro SE"),
+		},
+		.callback = clevo_xsm_dmi_matched,
+		.driver_data = &kb_full_color_with_lower_ops,
+	},
 	{
 		.ident = "Clevo P370SM-A",
 		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Notebook"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "P370SM-A"),
 		},
 		.callback = clevo_xsm_dmi_matched,
 		.driver_data = &kb_full_color_ops,
 	},
 	{
-		.ident = "Clevo P17xSM-A",
+		.ident = "Clevo P17SM-A",
 		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Notebook"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "P17SM-A"),
 		},
 		.callback = clevo_xsm_dmi_matched,
 		.driver_data = &kb_full_color_ops,
 	},
 	{
-		.ident = "Clevo P15xSM-A/P15xSM1-A",
+		.ident = "Clevo P15SM1-A",
 		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Notebook"),
-			DMI_MATCH(DMI_PRODUCT_NAME, "P15SM-A/SM1-A"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "P15SM1-A"),
 		},
 		.callback = clevo_xsm_dmi_matched,
 		.driver_data = &kb_full_color_ops,
 	},
 	{
-		.ident = "Clevo P17xSM",
+		.ident = "Clevo P15SM-A",
 		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Notebook"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "P15SM-A"),
+		},
+		.callback = clevo_xsm_dmi_matched,
+		.driver_data = &kb_full_color_ops,
+	},
+	{
+		.ident = "Clevo P17SM",
+		.matches = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "P17SM"),
 		},
 		.callback = clevo_xsm_dmi_matched,
 		.driver_data = &kb_8_color_ops,
 	},
 	{
-		.ident = "Clevo P15xSM",
+		.ident = "Clevo P15SM",
 		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Notebook"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "P15SM"),
+		},
+		.callback = clevo_xsm_dmi_matched,
+		.driver_data = &kb_8_color_ops,
+	},
+	{
+		.ident = "Clevo P150EM",
+		.matches = {
+			DMI_MATCH(DMI_PRODUCT_NAME, "P150EM"),
 		},
 		.callback = clevo_xsm_dmi_matched,
 		.driver_data = &kb_8_color_ops,
@@ -1160,7 +1286,7 @@ static int __init clevo_xsm_init(void)
 
 	switch (param_kb_color_num) {
 	case 1:
-		param_kb_color[1] = param_kb_color[2] = param_kb_color[0];
+		param_kb_color[1] = param_kb_color[2] = param_kb_color[0] = param_kb_color[3];
 		break;
 	case 2:
 		return -EINVAL;
@@ -1180,7 +1306,7 @@ static int __init clevo_xsm_init(void)
 
 	clevo_xsm_platform_device =
 		platform_create_bundle(&clevo_xsm_platform_driver,
-							   clevo_xsm_wmi_probe, NULL, 0, NULL, 0);
+			clevo_xsm_wmi_probe, NULL, 0, NULL, 0);
 
 	if (unlikely(IS_ERR(clevo_xsm_platform_device)))
 		return PTR_ERR(clevo_xsm_platform_device);
@@ -1222,7 +1348,8 @@ static void __exit clevo_xsm_exit(void)
 	clevo_xsm_input_exit();
 	clevo_xsm_rfkill_exit();
 
-	device_remove_file(&clevo_xsm_platform_device->dev, &dev_attr_kb_brightness);
+	device_remove_file(&clevo_xsm_platform_device->dev,
+		&dev_attr_kb_brightness);
 	device_remove_file(&clevo_xsm_platform_device->dev, &dev_attr_kb_state);
 	device_remove_file(&clevo_xsm_platform_device->dev, &dev_attr_kb_mode);
 	device_remove_file(&clevo_xsm_platform_device->dev, &dev_attr_kb_color);
@@ -1233,3 +1360,8 @@ static void __exit clevo_xsm_exit(void)
 
 module_init(clevo_xsm_init);
 module_exit(clevo_xsm_exit);
+
+MODULE_AUTHOR("Arnoud Willemsen <mail@lynthium.com>");
+MODULE_DESCRIPTION("Clevo SM series laptop driver.");
+MODULE_LICENSE("GPL");
+MODULE_VERSION("0.0.9");

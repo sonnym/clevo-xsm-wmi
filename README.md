@@ -1,17 +1,45 @@
-# Clevo-xSM-wmi
+# clevo-xsm-wmi
 
 Kernel module for keyboard backlighting of Clevo SM series notebooks.
+(And the P150EM, P720ZM, P750DM(-G), P770DM(-G) models)
 
-Based upon tuxedo-wmi, created by Christoph Jaeger.
+Based upon tuxedo-wmi, created by TUXEDO Computers GmbH.
 http://www.linux-onlineshop.de/forum/index.php?page=Thread&threadID=26
 
 ### Additions over tuxedo-wmi
 * Sysfs interface to control the brightness, mode, colour,
   on/off state after the module has loaded.
   In the original code you can only set these before the module loads.
-* Small application to visually control the keyboard lighting using the sysfs
-  interface.
-* Mode key cycles through colours.
+* Small QT based application to visually control the keyboard lighting using the sysfs interface.
+* Cycle through colours rather than modes with the keyboard key.
+* Initial support for lower led bar on the front of the machine.
+
+### Building
+
+Dependencies:
+
+* standard compile stuff (c compiler, make, etc)
+* linux-headers
+* qt5-base (for utility)
+
+Fedora 22+ Dependencies:
+
+* use qmake-qt5 instead of qmake
+* install qt5-qt3d-devel with DNF
+
+Building:
+```bash
+# For the module
+$ cd module && make && sudo make install
+# For the utility
+$ cd utility && qmake && make
+$ sudo install -Dm755 clevo-xsm-wmi /usr/bin/clevo-xsm-wmi
+$ sudo install -Dm755 systemd/clevo-xsm-wmi.service /usr/lib/systemd/system/clevo-xsm-wmi.service
+```
+
+### Distributions
+
+Arch Linux: [Module](https://aur.archlinux.org/packages/clevo-xsm-wmi/) [DKMS](https://aur.archlinux.org/packages/clevo-xsm-wmi-dkms/) [Utility](https://aur.archlinux.org/packages/clevo-xsm-wmi-util/)
 
 ### License
 This program is free software;  you can redistribute it and/or modify
